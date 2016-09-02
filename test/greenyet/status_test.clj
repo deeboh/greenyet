@@ -16,11 +16,11 @@
    :status-url url
    :config {:color key}})
 
-(defn- host-with-status-message-config [url color-key message-key]
+(defn- host-with-status-message-config [url message-key]
   {:hostname "the_host"
    :service "the_service"
    :status-url url
-   :config {:color color-key
+   :config {:color "color"
             :message message-key}})
 
 (defn- host-with-version-config [url package-version]
@@ -30,6 +30,12 @@
    :config {:color "color"
             :package-version package-version}})
 
+(defn- host-with-component-config-no-overall-status [url component-config]
+  {:hostname "the_host"
+   :service "the_service"
+   :status-url url
+   :config {:components component-config}})
+
 (defn- host-with-component-config [url component-config]
   {:hostname "the_host"
    :service "the_service"
@@ -37,22 +43,21 @@
    :config {:color "color"
             :components component-config}})
 
-(defmacro with-fake-resource [url resp-func & body]
-  `(fake/with-fake-http [{:url ~url}  (~resp-func nil)]
+(defmacro with-fake-resource [url resp & body]
+  `(fake/with-fake-http [{:url ~url} ~resp]
      ~@body))
 
 (defn- json-response [body]
-  (fn [_]
-    {:status 200
-     :headers {"Content-Type" "application/json"}
-     :body (j/generate-string body)}))
+  {:status 200
+   :headers {"Content-Type" "application/json"}
+   :body (j/generate-string body)})
 
 (def timeout 42)
 
 (deftest test-with-status
   (testing "should return red for 500"
-    (with-fake-resource "http://the_host/not_found" (fn [_] {:status 500
-                                                             :body ""})
+    (with-fake-resource "http://the_host/not_found" {:status 500
+                                                     :body ""}
       (with-local-vars [status nil]
         (sut/fetch-status (host-without-color-config "http://the_host/not_found")
                           timeout
@@ -61,8 +66,8 @@
                                    (:color status))))))))
 
   (testing "should return green for 200"
-    (with-fake-resource "http://the_host/found" (fn [_] {:status 200
-                                                         :body ""})
+    (with-fake-resource "http://the_host/found" {:status 200
+                                                 :body ""}
       (sut/fetch-status (host-without-color-config "http://the_host/found")
                         timeout
                         (fn [status]
@@ -94,8 +99,8 @@
                                  (:color status)))))))
 
   (testing "should fail if status key is configured but no JSON is provided"
-    (with-fake-resource "http://the_host/status.json" (fn [_] {:status 200
-                                                               :body "some body"})
+    (with-fake-resource "http://the_host/status.json" {:status 200
+                                                       :body "some body"}
       (sut/fetch-status (host-with-color-config "http://the_host/status.json" "status")
                         timeout
                         (fn [status]
@@ -138,8 +143,8 @@
 
   (testing "messages"
     (testing "simple 200 check"
-      (with-fake-resource "http://the_host/found" (fn [_] {:status 200
-                                                           :body ""})
+      (with-fake-resource "http://the_host/found" {:status 200
+                                                   :body ""}
         (sut/fetch-status (host-without-color-config "http://the_host/found")
                           timeout
                           (fn [status]
@@ -147,8 +152,8 @@
                                    (:message status)))))))
 
     (testing "for 500"
-      (with-fake-resource "http://the_host/error" (fn [_] {:status 500
-                                                           :body "Internal Error"})
+      (with-fake-resource "http://the_host/error"  {:status 500
+                                                    :body "Internal Error"}
         (sut/fetch-status (host-without-color-config "http://the_host/error")
                           timeout
                           (fn [status]
@@ -156,8 +161,8 @@
                                    (:message status)))))))
 
     (testing "for 302"
-      (with-fake-resource "http://the_host/redirect" (fn [_] {:status 302
-                                                              :body "Found"})
+      (with-fake-resource "http://the_host/redirect"  {:status 302
+                                                       :body "Found"}
         (sut/fetch-status (host-without-color-config "http://the_host/redirect")
                           timeout
                           (fn [status]
@@ -165,29 +170,114 @@
                                    (:message status)))))))
 
     (testing "for internal exception"
-      (with-fake-resource "http://the_host/status.json" (fn [_] {:status 200
-                                                                 :body "some body"})
+      (with-fake-resource "http://the_host/status.json"  {:status 200
+                                                          :body "some body"}
         (sut/fetch-status (host-with-color-config "http://the_host/status.json" "status")
                           timeout
                           (fn [status]
                             (is (some? (:message status)))))))
 
     (testing "should return message if configured"
-      (with-fake-resource "http://the_host/status.json" (json-response {:status "green"
+      (with-fake-resource "http://the_host/status.json" (json-response {:color "green"
                                                                         :message "up and running"})
         (sut/fetch-status (host-with-status-message-config "http://the_host/status.json"
-                                                           "status"
                                                            "message")
                           timeout
                           (fn [status]
                             (is (= "up and running"
-                                   (:message status))))))))
+                                   (first (:message status))))))))
+
+    (testing "should handle message list"
+      (with-fake-resource "http://the_host/status.json" (json-response {:color "green"
+                                                                        :message ["up and running"]})
+        (sut/fetch-status (host-with-status-message-config "http://the_host/status.json"
+                                                           "message")
+                          timeout
+                          (fn [status]
+                            (is (= "up and running"
+                                   (first (:message status))))))))
+
+    (testing "should indicate JSON parse error"
+      (with-fake-resource "http://the_host/status.json" {:status 200
+                                                         :headers {"Content-Type" "application/json"}
+                                                         :body "not_json"}
+        (sut/fetch-status (host-with-color-config "http://the_host/status.json" "color")
+                          timeout
+                          (fn [status]
+                            (is (re-find #"token.+not_json"
+                                         (:message status)))))))
+
+    (testing "should indicate failure to read color"
+      (with-fake-resource "http://the_host/status.json" (json-response {})
+        (sut/fetch-status (host-with-color-config "http://the_host/status.json" {:json-path "$.color"})
+                          timeout
+                          (fn [status]
+                            (is (re-find #"read color.+\$\.color"
+                                         (first (:message status))))))))
+
+    (testing "should indicate failure to read components"
+      (with-fake-resource "http://the_host/status.json" (json-response {:color "green"})
+        (sut/fetch-status (host-with-component-config "http://the_host/status.json" {:json-path "$.components"})
+                          timeout
+                          (fn [status]
+                            (is (re-find #"read components.+\$\.components"
+                                         (first (:message status))))))))
+
+    (testing "should indicate failure to read color for components"
+      (with-fake-resource "http://the_host/status.json" (json-response {:color "green"
+                                                                        :components [{}]})
+        (sut/fetch-status (host-with-component-config "http://the_host/status.json" {:json-path "$.components"
+                                                                                     :color "status"})
+                          timeout
+                          (fn [status]
+                            (is (re-find #"read component color.+status"
+                                         (first (:message status))))))))
+
+    (testing "should indicate failure to read name for components"
+      (with-fake-resource "http://the_host/status.json" (json-response {:color "green"
+                                                                        :components [{:color "green"
+                                                                                      :some_name nil}]})
+        (sut/fetch-status (host-with-component-config "http://the_host/status.json" {:json-path "$.components"
+                                                                                     :color "color"
+                                                                                     :name "some_name"})
+                          timeout
+                          (fn [status]
+                            (is (re-find #"read component name.+some_name"
+                                         (first (:message status))))))))
+
+    (testing "should indicate failure to read message for components"
+      (with-fake-resource "http://the_host/status.json" (json-response {:color "green"
+                                                                        :components [{:color "green"
+                                                                                      :name "a name"}]})
+        (sut/fetch-status (host-with-component-config "http://the_host/status.json" {:json-path "$.components"
+                                                                                     :color "color"
+                                                                                     :name "name"
+                                                                                     :message "the_message"})
+                          timeout
+                          (fn [status]
+                            (is (re-find #"read component message.+the_message"
+                                         (first (:message status))))))))
+
+    (testing "should indicate failure to read package-version"
+      (with-fake-resource "http://the_host/status.json" (json-response {:color "green"})
+        (sut/fetch-status (host-with-version-config "http://the_host/status.json" "package")
+                          timeout
+                          (fn [status]
+                            (is (re-find #"read package-version.+package"
+                                         (first (:message status))))))))
+
+    (testing "should indicate failure to read message"
+      (with-fake-resource "http://the_host/status.json" (json-response {:color "green"})
+        (sut/fetch-status (host-with-status-message-config "http://the_host/status.json" "freetext")
+                          timeout
+                          (fn [status]
+                            (is (re-find #"read message.+freetext"
+                                         (first (:message status)))))))))
 
   (testing "package-version"
     (testing "should extract value"
       (with-fake-resource "http://the_host/status.json" (json-response {:color "green"
-                                                                        :version "the-package-1.0.0"
-                                                                        :body ""})
+                                                                        :version "the-package-1.0.0"})
         (sut/fetch-status (host-with-version-config "http://the_host/status.json"
                                                     "version")
                           timeout
@@ -205,6 +295,57 @@
                             (is (nil? (:package-version status))))))))
 
   (testing "components"
+    (testing "no overall status"
+      (testing "return red if component red"
+        (with-fake-resource "http://the_host/with_components.json" (json-response {:components [{:status "green"}
+                                                                                                {:status "red"}
+                                                                                                {:status "yellow"}]})
+          (sut/fetch-status (host-with-component-config-no-overall-status "http://the_host/with_components.json"
+                                                                          {:json-path "$.components[*]"
+                                                                           :color "status"})
+                            timeout
+                            (fn [status]
+                              (is (= :red
+                                     (:color status)))))))
+      (testing "return yellow if component yellow"
+        (with-fake-resource "http://the_host/with_components.json" (json-response {:components [{:status "green"}
+                                                                                                {:status "yellow"}]})
+          (sut/fetch-status (host-with-component-config-no-overall-status "http://the_host/with_components.json"
+                                                                          {:json-path "$.components[*]"
+                                                                           :color "status"})
+                            timeout
+                            (fn [status]
+                              (is (= :yellow
+                                     (:color status)))))))
+      (testing "return green if all components green"
+        (with-fake-resource "http://the_host/with_components.json" (json-response {:components [{:status "green"}
+                                                                                                {:status "green"}]})
+          (sut/fetch-status (host-with-component-config-no-overall-status "http://the_host/with_components.json"
+                                                                          {:json-path "$.components[*]"
+                                                                           :color "status"})
+                            timeout
+                            (fn [status]
+                              (is (= :green
+                                     (:color status)))))))
+      (testing "return red if no components given"
+        (with-fake-resource "http://the_host/with_components.json" (json-response {:components []})
+          (sut/fetch-status (host-with-component-config-no-overall-status "http://the_host/with_components.json"
+                                                                          {:json-path "$.components[*]"
+                                                                           :color "status"})
+                            timeout
+                            (fn [status]
+                              (is (= :red
+                                     (:color status)))))))
+      (testing "return red if unknown component color"
+        (with-fake-resource "http://the_host/with_components.json" (json-response {:components [{:status "unknown"}]})
+          (sut/fetch-status (host-with-component-config-no-overall-status "http://the_host/with_components.json"
+                                                                          {:json-path "$.components[*]"
+                                                                           :color "status"})
+                            timeout
+                            (fn [status]
+                              (is (= :red
+                                     (:color status))))))))
+
     (testing "return all statuses"
       (with-fake-resource "http://the_host/with_components.json" (json-response {:color "yellow"
                                                                                  :components [{:status "green"}

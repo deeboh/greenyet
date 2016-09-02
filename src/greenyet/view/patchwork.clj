@@ -32,34 +32,24 @@
 (defn- environment-table-to-patchwork [environments table]
   (apply merge-with concat (map (partial zipmap environments) table)))
 
-(defn- table-as-html [environments rows]
-  (html [:table
-         [:colgroup {:span 1}]
-         [:colgroup.environments {:span (count environments)}]
-         [:thead
-          [:tr
-           [:td.system-name]
-           (for [env environments]
-             [:td (h env)])]]
-         [:tbody
-          (for [row rows]
-            [:tr
-             [:td.system-name
-              (let [system-name (h (some :system (mapcat first row)))]
-                [:a {:href (str/join ["?systems=" (h system-name)])}
-                 (h system-name)])]
-             (for [cell row]
-               [:td.hosts
-                (for [[host status] cell]
-                  (host-component/render host status))])])]]))
-
-
-(defn- patchwork-as-html [patchwork]
-  (html (for [[environment host-status] patchwork]
-          [:div.environment-wrapper
-           [:ol.patchwork {:class environment}
-            (for [[host status] host-status]
-              (host-component/render host status))]])))
+(defn- patchwork-as-html [patchwork params]
+  (html
+   [:header
+    (if-not (empty? params)
+      [:a.reset-selection {:href "?"}
+       "Reset selection"]
+      [:span.reset-selection
+       "Reset selection"])
+    (if-not (get params "hideGreen")
+      [:a.hide-green {:href (utils/link-select params "hideGreen" "true")}
+       "Unhealthy systems only"]
+      [:span.hide-green
+       "Unhealthy systems only"])]
+   (for [[environment host-status] patchwork]
+     [:div.environment-wrapper
+      [:ol.patchwork {:class environment}
+       (for [[host status] host-status]
+         (host-component/render host status params))]])))
 
 
 (defn- in-template [html template]
@@ -67,24 +57,18 @@
                "<!-- BODY -->"
                html))
 
-(defn- filter-systems [host-status-pairs selected-systems]
-  (if selected-systems
-    (let [selected-systems (map str/lower-case selected-systems)]
-      (filter (fn [[{system :system} _]]
-                (contains? (set selected-systems) (str/lower-case system)))
-              host-status-pairs))
-    host-status-pairs))
+(defn- environments [host-status-pairs]
+  (->> host-status-pairs
+       (map first)
+       (map :environment)
+       distinct))
 
-(defn render [host-status-pairs selected-systems page-template environment-names]
-  (let [environments      (utils/prefer-order-of environment-names
-                                                 (->> host-status-pairs
-                                                      (map first)
-                                                      (map :environment)
-                                                      distinct)
-                                                 str/lower-case)
-        selected-entries  (filter-systems host-status-pairs selected-systems)
-        rows              (environment-table environments selected-entries)
+(defn render [host-status-pairs page-template environment-names params]
+  (let [the-environments (utils/prefer-order-of environment-names
+                                                (environments host-status-pairs)
+                                                str/lower-case)
+        rows (environment-table the-environments host-status-pairs)
 
-        patchwork         (environment-table-to-patchwork environments rows)]
-    (in-template (patchwork-as-html patchwork)
+        patchwork (environment-table-to-patchwork the-environments rows)]
+    (in-template (patchwork-as-html patchwork params)
                  page-template)))

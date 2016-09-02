@@ -1,56 +1,50 @@
 (ns greenyet.status
   (:require [cheshire.core :as j]
-            json-path
+            [greenyet.parse :as parse]
             [org.httpkit.client :as http]))
 
-(defn- get-simple-key [json key]
-  (get json (keyword key)))
+(defn- status-color-from-components [components]
+  (let [colors (map :color components)
+        status-color (if (or (empty? colors)
+                             (some #(= % :red) colors))
+                       :red
+                       (if (some #(= % :yellow) colors)
+                         :yellow
+                         :green))]
+    [status-color nil]))
 
-(defn- get-complex-key [json key-conf]
-  (if (string? key-conf)
-    (get-simple-key json key-conf)
-    (let [path (:json-path key-conf)]
-      (json-path/at-path path json))))
+(defn- overall-status-color [json config components]
+  (if-let [color (parse/color json config)]
+    color
+    (status-color-from-components components)))
 
-(defn- color-value [color-conf key default]
-  (if (string? color-conf)
-    default
-    (or (get color-conf key)
-        default)))
+(defn- status-from-json [json config]
+  (let [[components components-error] (parse/components json config)
+        [color color-error] (overall-status-color json config components)
+        [package-version package-version-error] (parse/package-version json config)
+        [message message-error] (parse/message json config)]
+    {:color color
+     :message (vec (remove nil? (flatten [color-error
+                                          package-version-error
+                                          components-error
+                                          message-error
+                                          message])))
+     :package-version package-version
+     :components components}))
 
-(defn- status-color [json color-conf]
-  (let [color (get-complex-key json color-conf)
-        green-value (color-value color-conf :green-value "green")
-        yellow-value (color-value color-conf :yellow-value "yellow")]
-    (cond
-      (= green-value color) :green
-      (= yellow-value color) :yellow
-      :else :red)))
-
-(defn- component-statuses [json {path :json-path color-conf :color name-conf :name message-conf :message}]
-  (when path
-    (->> (json-path/at-path path json)
-         (map (fn [component]
-                {:color (status-color component color-conf)
-                 :name (get-simple-key component name-conf)
-                 :message (get-simple-key component message-conf)})))))
-
-(defn- application-status [response {color-conf :color
-                                     message-conf :message
-                                     package-version-conf :package-version
-                                     components-conf :components}]
-  (if color-conf
-    (let [json (j/parse-string (:body response) true)]
-      {:color (status-color json color-conf)
-       :message (get-simple-key json message-conf)
-       :package-version (get-simple-key json package-version-conf)
-       :components (component-statuses json components-conf)})
+(defn- application-status [body config]
+  (if (or (:color config)
+          (:components config))
+    (let [json (j/parse-string body true)]
+      (status-from-json json config))
     {:color :green
      :message "OK"}))
 
 (defn- message-for-http-response [response]
-  (format "Status %s: %s" (:status response) (:body response)))
-
+  (let [body (:body response)]
+    (if-not (empty? body)
+      (format "Status %s: %s" (:status response) body)
+      (format "Status %s" (:status response)))))
 
 (defn- http-get [status-url timeout-in-ms callback]
   (http/get status-url
@@ -62,18 +56,15 @@
 
 (defn- identify-status [response timeout-in-ms config]
   (try
-    (if (instance? org.httpkit.client.TimeoutException (:error response))
-      {:color :red
-       :message (format "Request timed out after %s milliseconds" timeout-in-ms)}
-      (if (= 200 (:status response))
-        (application-status response config)
-        {:color :red
-         :message (message-for-http-response response)}))
+    (cond
+      (:error response) {:color :red
+                         :message (format "greenyet: %s" (.getMessage (:error response)))}
+      (= 200 (:status response)) (application-status (:body response) config)
+      :else {:color :red
+             :message (message-for-http-response response)})
     (catch Exception e
       {:color :red
-       :message (if-let [response (ex-data e)]
-                  (message-for-http-response response)
-                  (.getMessage e))})))
+       :message (.getMessage e)})))
 
 (defn fetch-status [{:keys [status-url config]} timeout-in-ms callback]
   (http-get status-url

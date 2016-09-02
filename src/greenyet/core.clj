@@ -7,11 +7,13 @@
             [greenyet
              [config :as config]
              [poll :as poll]
+             [selection :as selection]
              [utils :as utils]]
             [greenyet.view
-             [styleguide :as styleguide]
-             [patchwork :as view]]
+             [patchwork :as patchwork]
+             [styleguide :as styleguide]]
             [ring.middleware
+             [content-type :as content-type]
              [not-modified :as not-modified]
              [params :as params]
              [resource :as resource]]
@@ -31,11 +33,16 @@
 
 
 (defn- render-environments [params]
-  (let [[host-with-statuses last-changed] @poll/statuses]
-    (-> (utils/html-response (view/render host-with-statuses
-                                          (utils/query-param-as-vec params "systems")
-                                          (page-template)
-                                          (environment-names)))
+  (let [[host-with-statuses last-changed] @poll/statuses
+        hide-green (= (get params "hideGreen") "true")]
+    (-> host-with-statuses
+        (selection/filter-hosts (get params "systems")
+                                (get params "environments")
+                                hide-green)
+        (patchwork/render (page-template)
+                          (environment-names)
+                          params)
+        utils/html-response
         (header "Last-Modified" (format-date (.toDate last-changed)))
         (header "Cache-Control" "max-age=0,must-revalidate"))))
 
@@ -76,6 +83,8 @@
 
 (def handler
   (-> render
+      (utils/wrap-param-lists ["systems" "environments"])
       params/wrap-params
       (resource/wrap-resource "public")
+      content-type/wrap-content-type
       not-modified/wrap-not-modified))

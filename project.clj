@@ -1,4 +1,4 @@
-(defproject greenyet "0.3.1"
+(defproject greenyet "1.0.0"
   :description "Are my machines green yet?"
   :url "https://github.com/cburgmer/greenyet"
   :license {:name "BSD 2-Clause"
@@ -18,7 +18,7 @@
                  [hiccup "1.0.5"]
                  [clj-yaml "0.4.0"]
                  [cheshire "5.4.0"]
-                 [json-path "0.2.0"]]
+                 [json-path "0.3.0"]]
   :profiles {:dev {:dependencies [[http-kit.fake "0.2.1"]
                                   [ring-mock "0.1.5"]]
                    :resource-paths ["resources" "test/resources"]

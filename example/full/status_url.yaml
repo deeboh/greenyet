@@ -3,7 +3,7 @@
   url: http://%hostname%:8000/found
 - system: SystemWith404
   url: http://%hostname%:8000/not_found
-- system: SystemStatusRed
+- system: SystemMissingColor
   url: http://%hostname%:8000/red.json
   color: color
   message: message
@@ -19,6 +19,12 @@
     json-path: $.status.main[0]
     green-value: healthy
     yellow-value: warning
+- system: ComponentsOnly
+  url: http://%hostname%:8000/components_only.json
+  components:
+    json-path: $.subSystems
+    color: status
+    name: name
 - system: ComponentStatuses
   url: http://%hostname%:8000/component_status.json
   color: color
